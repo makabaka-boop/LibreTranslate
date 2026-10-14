@@ -700,6 +700,10 @@ msgstr "待翻译文本"
 msgid "Delete text"
 msgstr "删除文本"
 
+#: libretranslate/templates/index.html:226
+msgid "Undo clear"
+msgstr "撤销清空"
+
 #: libretranslate/templates/index.html:232
 msgid "Translated text"
 msgstr "译文"

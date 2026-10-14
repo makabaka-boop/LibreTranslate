@@ -220,8 +220,12 @@
 									{{ _h("Text to translate") }}
 								</label>
 								<textarea id="textarea1" :maxLength="charactersLimit" v-model="inputText" @input="handleInput" ref="inputTextarea" dir="auto" :disabled="disableInput"></textarea>
-								<button class="btn-delete-text" title="{{ _h('Delete text') }}" aria-label="{{ _h('Delete text') }}" @click="deleteText">
+								<button v-if="lastDeletedText === ''" class="btn-delete-text" title="{{ _h('Delete text') }}" aria-label="{{ _h('Delete text') }}" @click="deleteText">
 									<i class="material-icons">close</i>
+								</button>
+								<button v-else type="button" class="btn-undo-delete" title="{{ _h('Undo clear') }}" aria-label="{{ _h('Undo clear') }}" @click="undoDeleteText">
+									<i class="material-icons" aria-hidden="true">true">undo</i>
+									<span>{{ _h("Undo clear") }}</span>
 								</button>
 								<div class="characters-limit-container" v-if="charactersLimit !== -1">
 									<label>[[ inputText.length ]] / [[ charactersLimit ]]</label>

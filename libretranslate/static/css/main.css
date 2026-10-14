@@ -251,6 +251,35 @@ select {
   background: none !important;
 }
 
+.btn-undo-delete {
+  position: absolute;
+  right: 1.5rem;
+  top: 0.75rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border-color);
+  border-radius: 1rem;
+  background-color: var(--sec-bg-color);
+  color: var(--fg-color);
+  padding: 0.2rem 0.7rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.btn-undo-delete:hover,
+.btn-undo-delete:focus {
+  background-color: var(--accent-color);
+  color: #fff;
+}
+
+.textarea-container .btn-undo-delete .material-icons {
+  color: inherit;
+  font-size: 1.05rem;
+}
+
 .characters-limit-container {
   position: absolute;
   right: 2rem;

@@ -27,6 +27,14 @@ document.addEventListener('DOMContentLoaded', function(){
             output: "",
             charactersLimit: -1,
 
+            // Most recent non-empty text removed by the "clear" action.
+            // Used to restore the text with "Undo clear"; entering new
+            // content invalidates it.
+            lastDeletedText: "",
+            // Bumped whenever a translation becomes obsolete, so a late
+            // response is discarded instead of overwriting the page.
+            transRequestToken: 0,
+
             detectedLangText: "",
 
             copyTextLabel: {{ _e("Copy text") }},
@@ -260,9 +268,14 @@ document.addEventListener('DOMContentLoaded', function(){
                     this.translatedText = "";
                     this.output = "";
                     this.abortPreviousTransRequest();
+                    this.transRequestToken++;
                     this.loadingTranslation = false;
                     return;
                 }
+
+                // Entering new content makes the text saved by the last
+                // "clear" action unrecoverable.
+                this.lastDeletedText = "";
 
                 var self = this;
 
@@ -270,6 +283,7 @@ document.addEventListener('DOMContentLoaded', function(){
                 this.timeout = setTimeout(function(){
                     self.abortPreviousTransRequest();
 
+                    var requestToken = ++self.transRequestToken;
                     var request = new XMLHttpRequest();
                     self.transRequest = request;
 
@@ -285,6 +299,9 @@ document.addEventListener('DOMContentLoaded', function(){
                     request.open('POST', BaseUrl + '/translate', true);
 
                     request.onload = function() {
+                        // The text was cleared, restored or changed while the
+                        // request was in flight: ignore the stale response.
+                        if (requestToken !== self.transRequestToken) return;
                         try{
                             {% if api_secret != "" %}
                             if (this.status === 400){
@@ -312,6 +329,7 @@ document.addEventListener('DOMContentLoaded', function(){
                     };
 
                     request.onerror = function() {
+                        if (requestToken !== self.transRequestToken) return;
                         self.error = {{ _e("Cannot load %(url)s", url=url_prefix + "/translate") }};
                         self.loadingTranslation = false;
                     };
@@ -390,7 +408,44 @@ document.addEventListener('DOMContentLoaded', function(){
             },
             deleteText: function(e){
                 e.preventDefault();
+
+                // Remember non-empty text so the clear can be undone.
+                // Clearing an already empty box must not discard a record
+                // saved by a previous non-empty clear.
+                if (this.inputText !== ""){
+                    this.lastDeletedText = this.inputText;
+                }
+
                 this.inputText = this.translatedText = this.output = "";
+                this.detectedLangText = "";
+
+                // Cancel the debounced (pending) and in-progress
+                // translations, and invalidate any response that may
+                // still arrive so it can't repopulate the page.
+                if (this.timeout) clearTimeout(this.timeout);
+                this.timeout = null;
+                this.abortPreviousTransRequest();
+                this.transRequestToken++;
+                this.loadingTranslation = false;
+
+                // Keep the address bar in sync. The text lives in the
+                // URL fragment, which is removed when it is cleared.
+                this.updateQueryParam('q', "");
+
+                this.$refs.inputTextarea.focus();
+            },
+            undoDeleteText: function(e){
+                e.preventDefault();
+                if (this.lastDeletedText === "") return;
+
+                var restored = this.lastDeletedText;
+                this.lastDeletedText = "";
+                this.inputText = restored;
+
+                // Retranslate the restored text with the current
+                // source/target languages and sync the URL fragment.
+                this.handleInput(e);
+
                 this.$refs.inputTextarea.focus();
             },
             switchType: function(type) {
