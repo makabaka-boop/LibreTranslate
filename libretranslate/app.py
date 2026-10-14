@@ -3,6 +3,7 @@ import math
 import os
 import re
 import tempfile
+import unicodedata
 import uuid
 import sys
 import warnings
@@ -75,6 +76,52 @@ def get_upload_dir():
         os.mkdir(upload_dir)
 
     return upload_dir
+
+
+# Sidecar file storing the user-provided download attachment name of a
+# translated file. It lives next to the translated file so that the custom
+# name has no effect on the translation format or on the storage path.
+DOWNLOAD_NAME_METADATA_SUFFIX = ".download_name"
+MAX_DOWNLOAD_NAME_LENGTH = 255
+
+
+def validate_download_name(download_name, expected_extension):
+    """Validate the optional download_name parameter of /translate_file.
+
+    The value is used exclusively as the attachment file name served by
+    /download_file (Content-Disposition). It never changes the translation
+    format or the path where files are stored on the server.
+
+    Returns the validated name, or None when no name was provided.
+    Aborts with HTTP 400 when the name is blank, contains path components
+    or control characters, or its extension does not match the translated
+    file extension.
+    """
+    if download_name is None:
+        return None
+
+    if not isinstance(download_name, str) or not download_name.strip():
+        abort(400, description=_("Invalid request: %(name)s cannot be empty", name="download_name"))
+
+    if (len(download_name) > MAX_DOWNLOAD_NAME_LENGTH
+            or "/" in download_name
+            or "\\" in download_name
+            or download_name in (".", "..")
+            or os.path.basename(download_name) != download_name):
+        abort(400, description=_("Invalid request: %(name)s must not contain paths", name="download_name"))
+
+    # "Cc" is the Unicode category of control characters (0x00-0x1F and
+    # 0x7F-0x9F). Rejecting them also blocks CR/LF header injection.
+    if any(unicodedata.category(ch) == "Cc" for ch in download_name):
+        abort(400, description=_("Invalid request: %(name)s must not contain control characters", name="download_name"))
+
+    stem, extension = os.path.splitext(download_name)
+    if (not stem.strip()
+            or not extension
+            or extension.lower() != expected_extension.lower()):
+        abort(400, description=_("Invalid request: %(name)s must be a file name ending with .%(ext)s", name="download_name", ext=expected_extension.lstrip(".")))
+
+    return download_name
 
 
 def get_req_api_key():
@@ -915,6 +962,19 @@ def create_app(args):
               example: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
             required: false
             description: API key
+          - in: formData
+            name: download_name
+            schema:
+              type: string
+              example: report.txt
+            required: false
+            description: >
+              Optional attachment file name to use when downloading the
+              translated file from translatedFileUrl. It must not contain
+              paths or control characters and its extension must match the
+              translated file format. Unicode characters (e.g. Chinese) and
+              spaces are supported. It does not affect the translation
+              format or the file storage path.
         responses:
           200:
             description: Translated file
@@ -980,8 +1040,13 @@ def create_app(args):
         if file.filename == '':
             abort(400, description=_("Invalid request: empty file"))
 
-        if os.path.splitext(file.filename)[1] not in frontend_argos_supported_files_format:
+        file_extension = os.path.splitext(file.filename)[1]
+        if file_extension not in frontend_argos_supported_files_format:
             abort(400, description=_("Invalid request: file format not supported"))
+
+        # Validate before translating: the translated file keeps the same
+        # extension as the uploaded file, so the download name must match it.
+        download_name = validate_download_name(request.form.get("download_name"), file_extension)
 
         src_lang = next((l for l in languages if l.code == source_lang), None)
 
@@ -1018,6 +1083,13 @@ def create_app(args):
             translated_file_path = argostranslatefiles.translate_file(src_lang.get_translation(tgt_lang), filepath)
             translated_filename = os.path.basename(translated_file_path)
 
+            if download_name is not None:
+                # Bind the custom attachment name to this specific translated
+                # file. Storage names stay UUID-prefixed, so concurrent or
+                # repeated requests with the same download name never collide.
+                with open(translated_file_path + DOWNLOAD_NAME_METADATA_SUFFIX, "w", encoding="utf-8") as metadata_file:
+                    metadata_file.write(download_name)
+
             return jsonify(
                 {
                     "translatedFileUrl": url_for('Main app.download_file', filename=translated_filename, _external=True)
@@ -1034,6 +1106,9 @@ def create_app(args):
         if args.disable_files_translation:
             abort(400, description=_("Files translation are disabled on this server."))
 
+        if filename.endswith(DOWNLOAD_NAME_METADATA_SUFFIX):
+            abort(400, description=_("Invalid filename"))
+
         filepath = os.path.join(get_upload_dir(), filename)
         try:
             checked_filepath = security.path_traversal_check(filepath, get_upload_dir())
@@ -1042,14 +1117,29 @@ def create_app(args):
         except security.SuspiciousFileOperationError:
             abort(400, description=_("Invalid filename"))
 
+        # Resolve the optional custom attachment name bound to this file
+        download_filename = None
+        try:
+            metadata_filepath = security.path_traversal_check(
+                filepath + DOWNLOAD_NAME_METADATA_SUFFIX, get_upload_dir()
+            )
+            if os.path.isfile(metadata_filepath):
+                with open(metadata_filepath, "r", encoding="utf-8") as metadata_file:
+                    download_filename = metadata_file.read()
+        except (security.SuspiciousFileOperationError, OSError):
+            download_filename = None
+
         return_data = io.BytesIO()
         with open(filepath, 'rb') as fo:
             return_data.write(fo.read())
         return_data.seek(0)
 
-        download_filename = filename.split('.')
-        download_filename.pop(0)
-        download_filename = '.'.join(download_filename)
+        if not download_filename:
+            # Fall back to the default name: strip the UUID prefix from
+            # "<uuid>.<original>_<target>.<ext>"
+            download_filename = filename.split('.')
+            download_filename.pop(0)
+            download_filename = '.'.join(download_filename)
 
         return send_file(return_data, as_attachment=True, download_name=download_filename)
 
